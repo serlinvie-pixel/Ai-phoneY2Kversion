@@ -73,16 +73,24 @@ export function SaveSlotsSettings() {
     };
     const next = [copy, ...slots];
     persistSlots(next);
+    let cloned = false;
     try {
       const { cloneIdentitySlotData } = await import("@/lib/data-management/identity-clone");
       const result = await cloneIdentitySlotData(source.id, copy.id);
+      cloned = true;
+      setStatus(`已复制「${slotLabel(source)}」的档位数据（${result.recordsCopied.toLocaleString()} 条记录），正在切换到副本。`);
       await switchPhoneIdentity(copy.id);
-      setStatus(`已复制「${slotLabel(source)}」的档位数据（${result.recordsCopied.toLocaleString()} 条记录），并切换到副本。`);
+      setActiveId(copy.id);
+      setBusyId(null);
     } catch (error) {
-      // The clone helper rolls back the target's private storage on data-copy errors.
-      const remaining = loadUserIdentities().filter(slot => slot.id !== copy.id);
-      persistSlots(remaining);
-      setStatus(error instanceof Error ? `复制失败：${error.message}` : "复制失败，请检查存储空间后重试。");
+      if (!cloned) {
+        // The clone helper rolls back the target's private storage on data-copy errors.
+        const remaining = loadUserIdentities().filter(slot => slot.id !== copy.id);
+        persistSlots(remaining);
+        setStatus(error instanceof Error ? `复制失败：${error.message}` : "复制失败，请检查存储空间后重试。");
+      } else {
+        setStatus(error instanceof Error ? `副本已创建，但切换失败：${error.message}` : "副本已创建，但切换失败。");
+      }
       setBusyId(null);
     }
   };
@@ -95,6 +103,7 @@ export function SaveSlotsSettings() {
       await switchPhoneIdentity(slotId);
       setActiveId(slotId);
       setStatus("已切换档位。");
+      setBusyId(null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "切换失败，请重试。");
       setBusyId(null);
@@ -108,8 +117,8 @@ export function SaveSlotsSettings() {
     setStatus("");
     try {
       await deletePhoneIdentity(slot.id);
-      const remaining = loadUserIdentities();
-      setSlots(remaining);
+      const remaining = slots.filter(item => item.id !== slot.id);
+      persistSlots(remaining);
       setActiveId(getCurrentIdentityId());
       setDeleteId(null);
       setStatus(`已删除档位「${slotLabel(slot)}」。`);
@@ -147,7 +156,7 @@ export function SaveSlotsSettings() {
                   <label className="menu-desc mb-1 block">档位名称</label>
                   <input
                     type="text"
-                    value={slot.slotName ?? ""}
+                    value={slot.slotName ?? slot.name ?? ""}
                     onChange={event => renameSlot(slot.id, event.target.value)}
                     placeholder={slot.name || "给这个世界线起个名字"}
                     maxLength={64}
@@ -205,10 +214,7 @@ export function SaveSlotsSettings() {
           variant="danger"
           confirmLabel="确认删除"
           cancelLabel="取消"
-          onConfirm={() => { setDeleteId(null); void (async () => {
-            setDeleteId(deletingSlot.id);
-            await removeSlot();
-          })(); }}
+          onConfirm={() => { void removeSlot(); }}
           onCancel={() => setDeleteId(null)}
         />
       )}
