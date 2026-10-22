@@ -494,7 +494,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                         <CardGrid
                             label="User"
                             labelClassName="settings-menu-section-title"
-                            items={SETTINGS_MENU.filter(item => ["identity", "about"].includes(item.id)).map(makeCardItem)}
+                            items={SETTINGS_MENU.filter(item => ["slots", "identity", "about"].includes(item.id)).map(makeCardItem)}
                         />
                         {accountSheetOpen && (
                             <div className="modal-overlay modal-overlay-bottom" data-ui="modal" onClick={() => setAccountSheetOpen(false)}>
