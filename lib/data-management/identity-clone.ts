@@ -5,16 +5,119 @@ import { scopeBackupModules } from "./identity-backup";
 import { createMediaCollector } from "./serializers";
 import type { DataSource, IdentityBackupDirectory, SourceBackup } from "./types";
 
-function remapIdentityReferences(value: unknown, sourceId: string, targetId: string): unknown {
-  if (Array.isArray(value)) return value.map(item => remapIdentityReferences(item, sourceId, targetId));
-  if (typeof value === "string" && value.includes(sourceId)) {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      const mapped = remapIdentityReferences(parsed, sourceId, targetId);
-      return JSON.stringify(mapped);
-    } catch {
-      return value;
+type ThemeAssetRecord = {
+  id: string;
+  type: string;
+  ownerUserId?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+const SLOT_OWNED_THEME_ASSET_TYPES = new Set(["chat_bg", "vn_scene", "vn_sprite"]);
+const THEME_DB_NAME = "ai_phone_theme_db_v1";
+const THEME_ASSET_STORE = "assets";
+
+function createCopiedAssetId(type: string): string {
+  const suffix = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return `${type}_${suffix}`;
+}
+
+async function openThemeAssetDbIfPresent(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB.databases === "function") {
+    const databases = await indexedDB.databases();
+    if (!databases.some(database => database.name === THEME_DB_NAME)) return null;
+  }
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(THEME_DB_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("无法读取角色场景素材库"));
+  });
+}
+
+async function cloneOwnedThemeAssets(sourceId: string, targetId: string): Promise<{ idMap: Map<string, string>; createdIds: string[] }> {
+  const db = await openThemeAssetDbIfPresent();
+  if (!db) return { idMap: new Map(), createdIds: [] };
+  try {
+    if (!db.objectStoreNames.contains(THEME_ASSET_STORE)) return { idMap: new Map(), createdIds: [] };
+
+    const originals = await new Promise<ThemeAssetRecord[]>((resolve, reject) => {
+      const result: ThemeAssetRecord[] = [];
+      const request = db.transaction(THEME_ASSET_STORE, "readonly").objectStore(THEME_ASSET_STORE).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve(result);
+        const asset = cursor.value as ThemeAssetRecord;
+        if (asset.ownerUserId === sourceId && SLOT_OWNED_THEME_ASSET_TYPES.has(asset.type)) result.push(asset);
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error ?? new Error("无法读取档位素材"));
+    });
+    if (originals.length === 0) return { idMap: new Map(), createdIds: [] };
+
+    const idMap = new Map<string, string>();
+    const copies = originals.map(asset => {
+      const id = createCopiedAssetId(asset.type);
+      idMap.set(asset.id, id);
+      return { ...asset, id, ownerUserId: targetId, updatedAt: new Date().toISOString() };
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(THEME_ASSET_STORE, "readwrite");
+      const store = tx.objectStore(THEME_ASSET_STORE);
+      for (const asset of copies) store.add(asset);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("复制档位素材失败"));
+      tx.onabort = () => reject(tx.error ?? new Error("复制档位素材已取消"));
+    });
+
+    return { idMap, createdIds: copies.map(asset => asset.id) };
+  } finally {
+    db.close();
+  }
+}
+
+async function removeCopiedThemeAssets(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await openThemeAssetDbIfPresent();
+  if (!db) return;
+  try {
+    if (!db.objectStoreNames.contains(THEME_ASSET_STORE)) return;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(THEME_ASSET_STORE, "readwrite");
+      const store = tx.objectStore(THEME_ASSET_STORE);
+      for (const id of ids) store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("回滚复制素材失败"));
+      tx.onabort = () => reject(tx.error ?? new Error("回滚复制素材已取消"));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function remapIdentityReferences(
+  value: unknown,
+  sourceId: string,
+  targetId: string,
+  assetIdMap: Map<string, string>,
+): unknown {
+  if (Array.isArray(value)) return value.map(item => remapIdentityReferences(item, sourceId, targetId, assetIdMap));
+  if (typeof value === "string") {
+    const directAssetId = assetIdMap.get(value);
+    if (directAssetId) return directAssetId;
+    const mayContainReference = value.includes(sourceId) || [...assetIdMap.keys()].some(id => value.includes(id));
+    if (mayContainReference) {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        const mapped = remapIdentityReferences(parsed, sourceId, targetId, assetIdMap);
+        return JSON.stringify(mapped);
+      } catch {
+        return value;
+      }
     }
+    return value;
   }
   if (!value || typeof value !== "object") return value;
 
@@ -23,11 +126,11 @@ function remapIdentityReferences(value: unknown, sourceId: string, targetId: str
     if ((key === "userIdentityId" || key === "ownerUserId") && child === sourceId) {
       return [key, targetId];
     }
-    return [key, remapIdentityReferences(child, sourceId, targetId)];
+    return [key, remapIdentityReferences(child, sourceId, targetId, assetIdMap)];
   }));
 }
 
-function prepareTargetPayload(payload: SourceBackup, sourceId: string, targetId: string): SourceBackup {
+function prepareTargetPayload(payload: SourceBackup, sourceId: string, targetId: string, assetIdMap: Map<string, string>): SourceBackup {
   const owner = { kind: "user" as const, userId: targetId };
   if (payload.type === "indexeddb") {
     return {
@@ -37,8 +140,8 @@ function prepareTargetPayload(payload: SourceBackup, sourceId: string, targetId:
         ...store,
         records: store.records.map(record => ({
           ...record,
-          key: remapIdentityReferences(record.key, sourceId, targetId),
-          value: remapIdentityReferences(record.value, sourceId, targetId),
+          key: remapIdentityReferences(record.key, sourceId, targetId, assetIdMap),
+          value: remapIdentityReferences(record.value, sourceId, targetId, assetIdMap),
         })),
       })),
     };
@@ -49,7 +152,7 @@ function prepareTargetPayload(payload: SourceBackup, sourceId: string, targetId:
     owner,
     records: payload.records.map(record => ({
       ...record,
-      value: remapIdentityReferences(record.value, sourceId, targetId) as string,
+      value: remapIdentityReferences(record.value, sourceId, targetId, assetIdMap) as string,
     })),
   };
 }
@@ -113,8 +216,14 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
   const modules = scopeBackupModules(DATA_MODULES, directory);
   let sourcesCopied = 0;
   let recordsCopied = 0;
+  let assetIdMap = new Map<string, string>();
+  let clonedAssetIds: string[] = [];
 
   try {
+    const clonedAssets = await cloneOwnedThemeAssets(sourceId, targetId);
+    assetIdMap = clonedAssets.idMap;
+    clonedAssetIds = clonedAssets.createdIds;
+
     for (const module of modules) {
       for (let index = 0; index < module.sources.length; index += 1) {
         const source = module.sources[index] as DataSource;
@@ -128,7 +237,7 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
           throw new Error(`无法复制「${module.label}」数据：${payload.error}`);
         }
   
-        const targetPayload = prepareTargetPayload(payload, sourceId, targetId);
+        const targetPayload = prepareTargetPayload(payload, sourceId, targetId, assetIdMap);
         const result = await importSource(targetPayload, true, async ref => collector.media.get(ref) ?? null);
         collector.media.clear();
         if (result.errors.length > 0) {
@@ -141,11 +250,15 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
     assertIdentityActive();
     if (getCurrentIdentityId() !== activeAtStart) throw new Error("复制期间当前档位发生变化，已中止");
   } catch (error) {
-    try {
-      await clearTargetIdentityNamespace(targetId);
-    } catch (cleanupError) {
-      const details = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      throw new Error(`复制失败，且自动清理未能完成（${details}）。目标档位可能残留部分数据，请先不要使用它。`);
+    const cleanup = await Promise.allSettled([
+      clearTargetIdentityNamespace(targetId),
+      removeCopiedThemeAssets(clonedAssetIds),
+    ]);
+    const failures = cleanup.flatMap(result => result.status === "rejected"
+      ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+      : []);
+    if (failures.length > 0) {
+      throw new Error(`复制失败，自动清理未能全部完成（${failures.join("；")}）。目标档位可能残留部分数据，请先不要使用它。`);
     }
     throw error;
   }
