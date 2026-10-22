@@ -553,7 +553,8 @@ export function VoiceSettings() {
             } else if (config.provider === "FishAudio") {
                 setFetchedVoices(prev => ({ ...prev, [config.id]: config.customVoices || [] }));
                 setManualVoiceIds(prev => ({ ...prev, [config.id]: true }));
-                setFetchError(prev => ({ ...prev, [config.id]: "Fish Audio 使用 Reference ID 指定音色；请粘贴你有权限使用的音色 ID。留空则使用服务默认音色。" }));
+                setFetchError(prev => ({ ...prev, [config.id]: "" }));
+                return;
             } else if (config.provider === "OpenAI") {
                 setFetchedVoices(prev => ({ ...prev, [config.id]: DEFAULT_OPENAI_VOICES }));
             } else {
