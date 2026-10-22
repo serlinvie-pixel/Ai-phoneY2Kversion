@@ -80,7 +80,8 @@ export function switchPhoneIdentity(userId: string): Promise<void> {
     // Failed backup/cloud pause leaves the active identity unchanged.
     pauseIdentityDispatch(true);
     await suspendCloud();
-    // Each slot keeps its own scheduled-action records. The old runtime is silenced below,\n    // and suspendCloud retires server-side jobs; do not erase resumable local state.
+    // Each slot keeps its own scheduled-action records. The old runtime is silenced below,
+    // and suspendCloud retires server-side jobs; do not erase resumable local state.
     silenceIdentityRuntime();
     installIdentityRuntime(next);
     requestPhoneSessionRemount();
