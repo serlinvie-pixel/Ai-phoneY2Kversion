@@ -1,4 +1,5 @@
-import { assertIdentityActive, getCurrentIdentityId, identityDatabaseIsShared } from "../identity-runtime";
+import { assertIdentityActive, getCurrentIdentityId, identityDatabaseIsShared, IDENTITY_ACCESS_KEY } from "../identity-runtime";
+import { kvGet, kvSetAsync } from "../kv-db";
 import { DATA_MODULES } from "./modules";
 import { exportSource, importSource } from "./idb";
 import { scopeBackupModules } from "./identity-backup";
@@ -157,6 +158,56 @@ function prepareTargetPayload(payload: SourceBackup, sourceId: string, targetId:
   };
 }
 
+async function grantCloneCharacterAccess(sourceId: string, targetId: string): Promise<void> {
+  const raw = kvGet(IDENTITY_ACCESS_KEY);
+  let access: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    access = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error("角色访问权限数据格式异常，已停止复制");
+  }
+
+  let changed = false;
+  const next: Record<string, string[]> = {};
+  for (const [characterId, value] of Object.entries(access)) {
+    if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
+      throw new Error("角色访问权限数据格式异常，已停止复制");
+    }
+    const ids = [...value] as string[];
+    if (ids.includes(sourceId) && !ids.includes(targetId)) {
+      ids.push(targetId);
+      changed = true;
+    }
+    next[characterId] = ids;
+  }
+  if (changed) await kvSetAsync(IDENTITY_ACCESS_KEY, JSON.stringify(next));
+}
+
+async function removeCloneCharacterAccess(targetId: string): Promise<void> {
+  const raw = kvGet(IDENTITY_ACCESS_KEY);
+  if (!raw) return;
+  let access: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    access = parsed as Record<string, unknown>;
+  } catch {
+    return;
+  }
+
+  let changed = false;
+  const next: Record<string, string[]> = {};
+  for (const [characterId, value] of Object.entries(access)) {
+    if (!Array.isArray(value) || value.some(item => typeof item !== "string")) continue;
+    const ids = (value as string[]).filter(id => id !== targetId);
+    if (ids.length !== value.length) changed = true;
+    next[characterId] = ids;
+  }
+  if (changed) await kvSetAsync(IDENTITY_ACCESS_KEY, JSON.stringify(next));
+}
+
 async function clearTargetIdentityNamespace(targetId: string): Promise<void> {
   const encoded = encodeURIComponent(targetId);
   const prefix = `identity:${encoded}:`;
@@ -249,10 +300,12 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
     }
     assertIdentityActive();
     if (getCurrentIdentityId() !== activeAtStart) throw new Error("复制期间当前档位发生变化，已中止");
+    await grantCloneCharacterAccess(sourceId, targetId);
   } catch (error) {
     const cleanup = await Promise.allSettled([
       clearTargetIdentityNamespace(targetId),
       removeCopiedThemeAssets(clonedAssetIds),
+      removeCloneCharacterAccess(targetId),
     ]);
     const failures = cleanup.flatMap(result => result.status === "rejected"
       ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
