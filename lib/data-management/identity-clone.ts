@@ -138,6 +138,8 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
         recordsCopied += result.added + result.overwritten;
       }
     }
+    assertIdentityActive();
+    if (getCurrentIdentityId() !== activeAtStart) throw new Error("复制期间当前档位发生变化，已中止");
   } catch (error) {
     try {
       await clearTargetIdentityNamespace(targetId);
@@ -148,7 +150,5 @@ export async function cloneIdentitySlotData(sourceId: string, targetId: string):
     throw error;
   }
 
-  assertIdentityActive();
-  if (getCurrentIdentityId() !== activeAtStart) throw new Error("复制期间当前档位发生变化，已中止");
   return { sourcesCopied, recordsCopied };
 }
