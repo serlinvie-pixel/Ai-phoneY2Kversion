@@ -54,6 +54,8 @@ export function SaveSlotsSettings() {
     persistSlots(next);
     try {
       await switchPhoneIdentity(slot.id);
+      setActiveId(slot.id);
+      setBusyId(null);
       setStatus("空白档位已创建并切换。可到「用户身份」中填写人物设定。");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "档位已创建，但切换失败。");
