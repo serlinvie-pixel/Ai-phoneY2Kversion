@@ -5,6 +5,7 @@ const expressiveModels = new Set(["eleven_v3", "eleven_v4", "eleven_v4_turbo"]);
 // keep parsing, saved speech and provider/model controls intact.
 export const VOICE_EXPRESSION_GUIDANCE_ENABLED = true;
 export function supportsVoiceExpression(provider: string, model: string | undefined): boolean {
+    if (provider === "FishAudio") return true;
     return provider === "ElevenLabs" && expressiveModels.has(model?.trim() || "");
 }
 export function voiceExpressionInstruction(characterIds: string[], call = false): string {
