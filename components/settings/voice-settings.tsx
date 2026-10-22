@@ -589,7 +589,7 @@ export function VoiceSettings() {
         try {
             const previewText = config.provider === "Minimax" && config.languageBoost
                 ? MINIMAX_PREVIEW_TEXT[config.languageBoost] || "你好，很高兴认识你。这是一段语音试听。"
-                : config.provider === "ElevenLabs" ? "你好，很高兴认识你。今天过得怎么样？这是我的声音。"
+                : config.provider === "ElevenLabs" || config.provider === "FishAudio" ? "你好，很高兴认识你。今天过得怎么样？这是我的声音。"
                 : "你好，我现在是" + (config.defaultVoice || "默认") + "音色。很高兴认识你。";
             const blob = await synthesizeSpeech(
                 previewText,
