@@ -80,7 +80,7 @@ export function switchPhoneIdentity(userId: string): Promise<void> {
     // Failed backup/cloud pause leaves the active identity unchanged.
     pauseIdentityDispatch(true);
     await suspendCloud();
-    await retireScheduledWork();
+    // Each slot keeps its own scheduled-action records. The old runtime is silenced below,\n    // and suspendCloud retires server-side jobs; do not erase resumable local state.
     silenceIdentityRuntime();
     installIdentityRuntime(next);
     requestPhoneSessionRemount();
@@ -88,22 +88,6 @@ export function switchPhoneIdentity(userId: string): Promise<void> {
   return transition;
 }
 
-async function retireScheduledWork(): Promise<void> {
-  const { kvGet, kvSetAsync } = await import("./kv-db");
-  for (const key of ["ai_phone_followup_schedules_v1", "ai_phone_moments_ai_schedule_v1", "ai_phone_moments_pending_reactions_v1", "ai_phone_timed_wake_schedules_v1"]) {
-    await kvSetAsync(key, "[]");
-  }
-  const idle = parse<Array<Record<string, unknown>>>(kvGet("ai_phone_idle_reconnect_rules_v1"), []);
-  await kvSetAsync("ai_phone_idle_reconnect_rules_v1", JSON.stringify(idle.map(rule => ({ ...rule, consecutiveCount: 3, lastFiredAt: Date.now() }))));
-}
-
-export function updateIdentityDirectory(identities: Array<{ id: string }>): void {
-  const state = readIdentityRuntime();
-  if (!state) return;
-  const ids = identities.map(identity => identity.id);
-  // Editing names/profiles preserves revision and running requests. Deletion uses the dedicated workflow.
-  installIdentityRuntime({ ...state, userIds: [...new Set(ids)] });
-}
 
 function deleteDatabase(name: string): Promise<void> {
   return new Promise((resolve, reject) => {
