@@ -44,6 +44,8 @@ export async function synthesizeSpeech(
     if (!supportsVoiceExpression(provider, voiceConfig.model)) text = text.replace(/\[[a-zA-Z][a-zA-Z ,'-]{0,100}\]/g, "").trim();
     if (provider === "ElevenLabs") return synthesizeElevenLabs(text, voiceConfig);
 
+    if (provider === "FishAudio") return synthesizeFishAudio(text, voiceConfig);
+
     if (provider === "Minimax") {
         return synthesizeMinimax(text, voiceConfig, options?.emotion);
     }
@@ -74,6 +76,40 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TTS_
     } finally {
         clearTimeout(timer);
     }
+}
+
+// ── Fish Audio TTS ──────────────────────────────────
+
+async function synthesizeFishAudio(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey.trim()) throw new Error("Fish Audio API Key 未配置");
+
+    const speed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+        ? Math.min(2, Math.max(0.5, config.speechSpeed))
+        : 1;
+
+    const response = await fetchWithTimeout("/api/voice/fish-audio/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            apiKey: config.apiKey.trim(),
+            baseUrl: config.baseUrl || "https://api.fish.audio/v1",
+            model: (config.model || "s2.1-pro-free").trim(),
+            referenceId: config.defaultVoice.trim(),
+            text,
+            speed,
+        }),
+    });
+
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const detail = typeof payload.detail === "string" ? payload.detail : "";
+        const message = typeof payload.error === "string" ? payload.error : "Fish Audio TTS 请求失败";
+        throw new Error(`${message} (${response.status})${detail ? `: ${detail.slice(0, 240)}` : ""}`);
+    }
+
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("Fish Audio 未返回音频数据");
+    return new Blob([await blob.arrayBuffer()], { type: blob.type || "audio/mpeg" });
 }
 
 // ── Minimax TTS ─────────────────────────────────────
