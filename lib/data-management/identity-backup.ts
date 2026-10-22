@@ -22,7 +22,7 @@ export function createIdentityBackupDirectory(mode: "current" | "all" = "all"): 
   return { mode, users: ids.map(id => {
     const card = cards.find(item => item.id === id);
     if (!card) throw new Error("身份目录不完整，已停止备份");
-    return { id, name: card.name || "未命名身份" };
+    return { id, name: typeof card.slotName === "string" && card.slotName.trim() ? card.slotName.trim() : card.name || "未命名档位" };
   }) };
 }
 
