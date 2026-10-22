@@ -44,6 +44,8 @@ export async function synthesizeSpeech(
     if (!supportsVoiceExpression(provider, voiceConfig.model)) text = text.replace(/\[[a-zA-Z][a-zA-Z ,'-]{0,100}\]/g, "").trim();
     if (provider === "ElevenLabs") return synthesizeElevenLabs(text, voiceConfig);
 
+    if (provider === "FishAudio") return synthesizeFishAudio(text, voiceConfig);
+
     if (provider === "Minimax") {
         return synthesizeMinimax(text, voiceConfig, options?.emotion);
     }
@@ -75,6 +77,43 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TTS_
         clearTimeout(timer);
     }
 }
+
+// ── Fish Audio TTS ──────────────────────────────────
+
+async function synthesizeFishAudio(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey.trim()) throw new Error("Fish Audio API Key 未配置");
+
+    const baseUrl = (config.baseUrl || "https://api.fish.audio/v1").replace(/\/$/, "");
+    const model = (config.model || "s2.1-pro-free").trim();
+    const speed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+        ? Math.min(2, Math.max(0.5, config.speechSpeed))
+        : 1;
+
+    const response = await fetchWithTimeout(`${baseUrl}/tts`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${config.apiKey.trim()}`,
+            "Content-Type": "application/json",
+            model,
+        },
+        body: JSON.stringify({
+            text,
+            ...(config.defaultVoice.trim() ? { reference_id: config.defaultVoice.trim() } : {}),
+            format: "mp3",
+            speed,
+        }),
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Fish Audio TTS 请求失败 (${response.status})${detail ? `: ${detail.slice(0, 240)}` : ""}`);
+    }
+
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("Fish Audio 未返回音频数据");
+    return new Blob([await blob.arrayBuffer()], { type: blob.type || "audio/mpeg" });
+}
+
 
 // ── Minimax TTS ─────────────────────────────────────
 
