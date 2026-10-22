@@ -11,6 +11,7 @@ import { createIdentityId } from "@/lib/identity-space";
 
 export type UserIdentity = {
     id: string;
+    slotName?: string;
     name: string;
     previousNames?: string[];
     avatarUrl?: string;
